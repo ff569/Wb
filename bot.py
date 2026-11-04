@@ -4,7 +4,7 @@ import logging
 import asyncio
 import sqlite3
 from aiohttp import web
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, LabeledPrice, PreCheckoutQuery
 from aiogram.enums import ParseMode
@@ -23,7 +23,7 @@ STARS_PRICE = 300
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# --- БАЗА ДАННЫХ (встроенный sqlite3) ---
+# --- БАЗА ДАННЫХ ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -72,44 +72,45 @@ def main_menu():
     ])
 
 def back_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад в меню", callback_data="start")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В главное меню", callback_data="start")]])
 
 def item_menu(nm):
-    # Кнопка удаления прямо под каждым товаром
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Удалить этот товар", callback_data=f"del_{nm}")]
+        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"del_{nm}")]
     ])
 
 # --- ХЕНДЛЕРЫ ---
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    # Это приветствие, которое видно до нажатия кнопок
     text = (
-        "👋 <b>Привет! Я — WB-Детектор.</b>\n\n"
-        "Я слежу за ценами на Wildberries и присылаю алерты, когда они падают.\n\n"
-        "📌 <b>Как пользоваться:</b>\n"
-        "1. Скопируй ссылку на товар с WB.\n"
-        "2. Отправь её мне (можно добавить целевую цену через пробел).\n"
-        "3. Я проверяю цену каждый час и пишу, если она упала на 5% или достигла цели.\n\n"
-        f"🎁 <b>Бесплатно:</b> {FREE_LIMIT} товара.\n"
-        "💎 <b>Безлимит:</b> 300 ⭐️ (Stars) на 30 дней.\n\n"
+        "👋 <b>Добро пожаловать в WB-Детектор!</b>\n\n"
+        "Я помогу тебе следить за ценами на Wildberries.\n"
+        "Просто пришли мне ссылку на товар, и я запомню его.\n\n"
+        f"🎁 Бесплатно можно добавить <b>{FREE_LIMIT}</b> товара.\n"
+        "💎 Безлимит на 30 дней — 300 ⭐️ (Stars).\n\n"
         "Выбирай действие в меню ниже:"
     )
     await message.answer(text, reply_markup=main_menu())
 
+# Обработчик кнопки "Назад в меню"
 @dp.callback_query(F.data == "start")
-async def cb_start(callback: CallbackQuery):
-    await callback.message.edit_text("Главное меню:", reply_markup=main_menu())
+async def cb_back_to_menu(callback: CallbackQuery):
+    await callback.message.edit_text(
+        "🏠 <b>Главное меню</b>\nВыбирай действие:",
+        reply_markup=main_menu()
+    )
     await callback.answer()
 
 @dp.callback_query(F.data == "help")
 async def cb_help(callback: CallbackQuery):
     text = (
-        "❓ <b>Подробная инструкция</b>\n\n"
-        "1. <b>Добавление:</b> Просто кинь ссылку вида <code>https://www.wildberries.ru/catalog/12345678/detail.aspx</code>\n"
-        "   Чтобы задать цель, допиши цену: <code>...detail.aspx 1500</code>\n"
-        "2. <b>Проверка:</b> Я проверяю цены раз в час. Если цена упадет на 5% или ниже цели — пришлю пуш.\n"
-        "3. <b>Список:</b> Кнопка «Мои товары» покажет всё, что ты добавил.\n"
-        "4. <b>Удаление:</b> В списке товаров есть кнопка «Удалить».\n"
+        "❓ <b>Инструкция по использованию:</b>\n\n"
+        "1. Скопируй ссылку на товар с Wildberries.\n"
+        "2. Отправь её мне в чат.\n"
+        "3. Если хочешь задать целевую цену, допиши её через пробел: <code>...detail.aspx 1500</code>\n"
+        "4. Я проверяю цены каждый час. Если цена упадет на 5% или ниже цели — пришлю уведомление.\n\n"
+        "Чтобы вернуться в меню, жми «В главное меню»."
     )
     await callback.message.edit_text(text, reply_markup=back_menu())
     await callback.answer()
@@ -118,7 +119,7 @@ async def cb_help(callback: CallbackQuery):
 async def cb_buy(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"⭐️ Оплатить {STARS_PRICE} Stars", callback_data="pay")],
-        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="start")]
+        [InlineKeyboardButton(text="🔙 В главное меню", callback_data="start")]
     ])
     await callback.message.edit_text(
         f"💎 <b>Безлимит на 30 дней</b>\n\n"
@@ -151,7 +152,7 @@ async def process_successful_payment(message: Message):
     db_run("INSERT OR REPLACE INTO users (id, paid_until) VALUES (?, ?)", (message.chat.id, now + 30 * 86400))
     await message.answer("✅ <b>Оплата прошла!</b>\nБезлимит активирован на 30 дней. Спасибо!")
 
-# --- СПИСОК ТОВАРОВ И УДАЛЕНИЕ ---
+# --- СПИСОК ТОВАРОВ ---
 @dp.callback_query(F.data == "list")
 async def cb_list(callback: CallbackQuery):
     rows = db_all("SELECT nm, target, last_price FROM tracks WHERE user_id = ?", (callback.from_user.id,))
@@ -161,13 +162,13 @@ async def cb_list(callback: CallbackQuery):
         await callback.answer()
         return
     
-    # Отправляем каждый товар отдельным сообщением, чтобы была кнопка "Удалить" под каждым
-    await callback.message.edit_text("📋 <b>Твои товары:</b>\n(Нажми «Удалить» под нужным товаром)", reply_markup=back_menu())
+    await callback.message.edit_text("📋 <b>Твои товары:</b>", reply_markup=back_menu())
     
+    # Отправляем каждый товар отдельным сообщением с кнопкой удаления
     for nm, target, last_price in rows:
         price = f"{last_price} ₽" if last_price else "—"
         tgt = f" (цель: {target} ₽)" if target else ""
-        text = f"🔹 <b>Артикул:</b> <code>{nm}</code>\n💰 <b>Текущая цена:</b> {price}{tgt}\nhttps://www.wildberries.ru/catalog/{nm}/detail.aspx"
+        text = f"🔹 <b>Артикул:</b> <code>{nm}</code>\n💰 <b>Цена:</b> {price}{tgt}\nhttps://www.wildberries.ru/catalog/{nm}/detail.aspx"
         await callback.message.answer(text, reply_markup=item_menu(nm), disable_web_page_preview=True)
     
     await callback.answer()
