@@ -68,58 +68,64 @@ async def fetch_wb_prices(nms):
 def main_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📋 Мои товары", callback_data="list"), InlineKeyboardButton(text="💎 Безлимит", callback_data="buy")],
-        [InlineKeyboardButton(text="❓ Инструкция", callback_data="help")]
+        [InlineKeyboardButton(text="🔍 Проверить цены", callback_data="check"), InlineKeyboardButton(text="❓ Инструкция", callback_data="help")]
     ])
 
 def back_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 В главное меню", callback_data="start")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад в меню", callback_data="start")]])
 
 def item_menu(nm):
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Удалить", callback_data=f"del_{nm}")]
+        [InlineKeyboardButton(text="🗑 Удалить товар", callback_data=f"del_{nm}")]
     ])
 
 # --- ХЕНДЛЕРЫ ---
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    # Это приветствие, которое видно до нажатия кнопок
-    text = (
-        "👋 <b>Добро пожаловать в WB-Детектор!</b>\n\n"
-        "Я помогу тебе следить за ценами на Wildberries.\n"
-        "Просто пришли мне ссылку на товар, и я запомню его.\n\n"
-        f"🎁 Бесплатно можно добавить <b>{FREE_LIMIT}</b> товара.\n"
-        "💎 Безлимит на 30 дней — 300 ⭐️ (Stars).\n\n"
-        "Выбирай действие в меню ниже:"
+    # ТО САМОЕ ПРИВЕТСТВИЕ, КОТОРОЕ ТЫ ПРОСИЛ
+    welcome_text = (
+        f"👋 <b>Привет, {message.from_user.first_name}!</b>\n\n"
+        "Я — <b>WB-Детектор</b>. Моя задача — следить за ценами на Wildberries, чтобы ты не переплачивал.\n\n"
+        "📌 <b>Что я умею:</b>\n"
+        "• Принимаю ссылки на товары WB.\n"
+        "• Проверяю цены каждый час.\n"
+        "• Присылаю алерты при падении цены на 5% или при достижении твоей цели.\n\n"
+        f"🎁 <b>Твой лимит:</b> {FREE_LIMIT} товара бесплатно.\n"
+        "💎 <b>Безлимит:</b> 300 ⭐️ (Stars) на 30 дней.\n\n"
+        "👇 <b>Выбери действие в меню ниже:</b>"
     )
-    await message.answer(text, reply_markup=main_menu())
+    await message.answer(welcome_text, reply_markup=main_menu())
 
-# Обработчик кнопки "Назад в меню"
 @dp.callback_query(F.data == "start")
 async def cb_back_to_menu(callback: CallbackQuery):
-    await callback.message.edit_text(
-        "🏠 <b>Главное меню</b>\nВыбирай действие:",
-        reply_markup=main_menu()
-    )
+    await callback.message.edit_text("🏠 <b>Главное меню</b>\nВыбирай действие:", reply_markup=main_menu())
     await callback.answer()
 
 @dp.callback_query(F.data == "help")
 async def cb_help(callback: CallbackQuery):
     text = (
         "❓ <b>Инструкция по использованию:</b>\n\n"
-        "1. Скопируй ссылку на товар с Wildberries.\n"
-        "2. Отправь её мне в чат.\n"
-        "3. Если хочешь задать целевую цену, допиши её через пробел: <code>...detail.aspx 1500</code>\n"
-        "4. Я проверяю цены каждый час. Если цена упадет на 5% или ниже цели — пришлю уведомление.\n\n"
-        "Чтобы вернуться в меню, жми «В главное меню»."
+        "1. <b>Добавление:</b> Скопируй ссылку на товар с Wildberries и отправь её мне в чат.\n"
+        "2. <b>Цель:</b> Если хочешь, чтобы я сообщил, когда цена станет ниже определённой, допиши её через пробел: <code>...detail.aspx 1500</code>\n"
+        "3. <b>Проверка:</b> Я проверяю цены каждый час автоматически. Или нажми «Проверить цены» в меню.\n"
+        "4. <b>Уведомления:</b> Я пришлю сообщение, если цена упадёт на 5% или достигнет твоей цели.\n\n"
+        "Чтобы вернуться, жми «Назад в меню»."
     )
     await callback.message.edit_text(text, reply_markup=back_menu())
     await callback.answer()
+
+@dp.callback_query(F.data == "check")
+async def cb_check(callback: CallbackQuery):
+    await callback.message.edit_text("⏳ Проверяю цены для твоих товаров...")
+    await callback.answer()
+    await check_prices(manual=True, user_id=callback.from_user.id)
+    await callback.message.answer("✅ Проверка завершена. Если цены изменились — я пришлю уведомление.")
 
 @dp.callback_query(F.data == "buy")
 async def cb_buy(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"⭐️ Оплатить {STARS_PRICE} Stars", callback_data="pay")],
-        [InlineKeyboardButton(text="🔙 В главное меню", callback_data="start")]
+        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="start")]
     ])
     await callback.message.edit_text(
         f"💎 <b>Безлимит на 30 дней</b>\n\n"
@@ -164,7 +170,6 @@ async def cb_list(callback: CallbackQuery):
     
     await callback.message.edit_text("📋 <b>Твои товары:</b>", reply_markup=back_menu())
     
-    # Отправляем каждый товар отдельным сообщением с кнопкой удаления
     for nm, target, last_price in rows:
         price = f"{last_price} ₽" if last_price else "—"
         tgt = f" (цель: {target} ₽)" if target else ""
@@ -192,7 +197,6 @@ async def handle_text(message: Message):
     
     nm = int(match.group(1))
     
-    # Проверка лимита
     user = db_all("SELECT paid_until FROM users WHERE id = ?", (message.chat.id,))
     paid_until = user[0][0] if user else 0
     
@@ -202,7 +206,6 @@ async def handle_text(message: Message):
             await message.answer(f"🚫 Бесплатный лимит ({FREE_LIMIT} шт.) исчерпан.\nКупи безлимит в /start -> Безлимит.")
             return
     
-    # Парсинг цели
     target = 0
     t_match = re.search(r"\s(\d{3,7})\s*$", text)
     if t_match:
@@ -221,50 +224,56 @@ async def handle_text(message: Message):
         msg += f"🎯 Алерт при цене <= {target} ₽" if target else "🎯 Алерт при падении на 5%+"
         await message.answer(msg)
 
-# --- ФОНОВАЯ ПРОВЕРКА ЦЕН (CRON) ---
-async def check_prices():
-    while True:
-        await asyncio.sleep(3600)
-        logging.info("Запуск проверки цен...")
+# --- ФОНОВАЯ ПРОВЕРКА ЦЕН ---
+async def check_prices(manual=False, user_id=None):
+    logging.info("Запуск проверки цен...")
+    if manual and user_id:
+        rows = db_all("SELECT user_id, nm, target, last_price FROM tracks WHERE user_id = ?", (user_id,))
+    else:
         rows = db_all("SELECT user_id, nm, target, last_price FROM tracks")
+    
+    if not rows: return
+    
+    by_nm = {}
+    for uid, nm, target, last_price in rows:
+        if nm not in by_nm: by_nm[nm] = []
+        by_nm[nm].append((uid, target, last_price))
+    
+    nms = list(by_nm.keys())
+    for i in range(0, len(nms), 50):
+        chunk = nms[i:i+50]
+        prices = await fetch_wb_prices(chunk)
         
-        if not rows: continue
-        
-        by_nm = {}
-        for user_id, nm, target, last_price in rows:
-            if nm not in by_nm: by_nm[nm] = []
-            by_nm[nm].append((user_id, target, last_price))
-        
-        nms = list(by_nm.keys())
-        for i in range(0, len(nms), 50):
-            chunk = nms[i:i+50]
-            prices = await fetch_wb_prices(chunk)
+        for nm in chunk:
+            if nm not in prices: continue
+            new_price = prices[nm]
             
-            for nm in chunk:
-                if nm not in prices: continue
-                new_price = prices[nm]
+            for uid, target, old_price in by_nm[nm]:
+                hit = False
+                if old_price and new_price < old_price:
+                    if target and new_price <= target:
+                        hit = True
+                    elif not target and (old_price - new_price) >= old_price * 0.05:
+                        hit = True
                 
-                for user_id, target, old_price in by_nm[nm]:
-                    hit = False
-                    if old_price and new_price < old_price:
-                        if target and new_price <= target:
-                            hit = True
-                        elif not target and (old_price - new_price) >= old_price * 0.05:
-                            hit = True
-                    
-                    if hit:
-                        url = f"https://www.wildberries.ru/catalog/{nm}/detail.aspx"
-                        await bot.send_message(user_id, f"📉 <b>Цена упала!</b>\nБыло: {old_price} ₽ → Стало: {new_price} ₽\n{url}", disable_web_page_preview=True)
-                    
-                    if new_price != old_price:
-                        db_run("UPDATE tracks SET last_price = ? WHERE user_id = ? AND nm = ?", (new_price, user_id, nm))
+                if hit:
+                    url = f"https://www.wildberries.ru/catalog/{nm}/detail.aspx"
+                    await bot.send_message(uid, f"📉 <b>Цена упала!</b>\nБыло: {old_price} ₽ → Стало: {new_price} ₽\n{url}", disable_web_page_preview=True)
+                
+                if new_price != old_price:
+                    db_run("UPDATE tracks SET last_price = ? WHERE user_id = ? AND nm = ?", (new_price, uid, nm))
+
+async def periodic_check():
+    while True:
+        await asyncio.sleep(3600) # Каждый час
+        await check_prices()
 
 # --- ЗАПУСК ---
 async def on_startup(app):
     init_db()
     await bot.set_webhook(f"{WEBHOOK_URL}{WEBHOOK_PATH}")
     logging.info(f"Webhook set to {WEBHOOK_URL}{WEBHOOK_PATH}")
-    asyncio.create_task(check_prices())
+    asyncio.create_task(periodic_check())
 
 def main():
     app = web.Application()
