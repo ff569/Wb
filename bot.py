@@ -23,7 +23,7 @@ STARS_PRICE = 300
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
-# --- БАЗА ДАННЫХ (sqlite3) ---
+# --- БАЗА ДАННЫХ (встроенный sqlite3) ---
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -72,7 +72,13 @@ def main_menu():
     ])
 
 def back_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="start")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад в меню", callback_data="start")]])
+
+def item_menu(nm):
+    # Кнопка удаления прямо под каждым товаром
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить этот товар", callback_data=f"del_{nm}")]
+    ])
 
 # --- ХЕНДЛЕРЫ ---
 @dp.message(Command("start"))
@@ -112,7 +118,7 @@ async def cb_help(callback: CallbackQuery):
 async def cb_buy(callback: CallbackQuery):
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"⭐️ Оплатить {STARS_PRICE} Stars", callback_data="pay")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="start")]
+        [InlineKeyboardButton(text="🔙 Назад в меню", callback_data="start")]
     ])
     await callback.message.edit_text(
         f"💎 <b>Безлимит на 30 дней</b>\n\n"
@@ -145,7 +151,7 @@ async def process_successful_payment(message: Message):
     db_run("INSERT OR REPLACE INTO users (id, paid_until) VALUES (?, ?)", (message.chat.id, now + 30 * 86400))
     await message.answer("✅ <b>Оплата прошла!</b>\nБезлимит активирован на 30 дней. Спасибо!")
 
-# --- СПИСОК ТОВАРОВ ---
+# --- СПИСОК ТОВАРОВ И УДАЛЕНИЕ ---
 @dp.callback_query(F.data == "list")
 async def cb_list(callback: CallbackQuery):
     rows = db_all("SELECT nm, target, last_price FROM tracks WHERE user_id = ?", (callback.from_user.id,))
@@ -155,14 +161,23 @@ async def cb_list(callback: CallbackQuery):
         await callback.answer()
         return
     
-    text = "📋 <b>Твои товары:</b>\n\n"
-    for i, (nm, target, last_price) in enumerate(rows, 1):
+    # Отправляем каждый товар отдельным сообщением, чтобы была кнопка "Удалить" под каждым
+    await callback.message.edit_text("📋 <b>Твои товары:</b>\n(Нажми «Удалить» под нужным товаром)", reply_markup=back_menu())
+    
+    for nm, target, last_price in rows:
         price = f"{last_price} ₽" if last_price else "—"
         tgt = f" (цель: {target} ₽)" if target else ""
-        text += f"{i}. {price}{tgt}\nhttps://www.wildberries.ru/catalog/{nm}/detail.aspx\n\n"
+        text = f"🔹 <b>Артикул:</b> <code>{nm}</code>\n💰 <b>Текущая цена:</b> {price}{tgt}\nhttps://www.wildberries.ru/catalog/{nm}/detail.aspx"
+        await callback.message.answer(text, reply_markup=item_menu(nm), disable_web_page_preview=True)
     
-    await callback.message.edit_text(text, reply_markup=back_menu(), disable_web_page_preview=True)
     await callback.answer()
+
+@dp.callback_query(F.data.startswith("del_"))
+async def cb_delete(callback: CallbackQuery):
+    nm = int(callback.data.split("_")[1])
+    db_run("DELETE FROM tracks WHERE user_id = ? AND nm = ?", (callback.from_user.id, nm))
+    await callback.message.edit_text(f"🗑 Товар <code>{nm}</code> удален.")
+    await callback.answer("Удалено!")
 
 # --- ОБРАБОТКА ССЫЛОК ---
 @dp.message(F.text)
