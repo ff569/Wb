@@ -8,29 +8,27 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
-    Message, InlineKeyboardMarkup, InlineKeyboardButton,
-    CallbackQuery, LabeledPrice, PreCheckoutQuery,
+    Message, InlineKeyboardMarkup, InlineKeyboardButton, 
+    CallbackQuery, LabeledPrice, PreCheckoutQuery, 
     ReplyKeyboardMarkup, KeyboardButton
 )
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
+# --- НАСТРОЙКИ ---
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-
-# --- ENV ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL")
+WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL") # Render подставит сам
 WEBHOOK_PATH = "/webhook"
 DB_PATH = "wb_bot.db"
 
-# --- Тарифы ---
+# --- ТВОЙ ID (УЗНАТЬ У @userinfobot) ---
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 0))
+
 FREE_LIMIT = 3
 PRO_LIMIT = 50
-BUSINESS_LIMIT = 500
-PRO_PRICE_RUB = 2990
 PRO_PRICE_STARS = 300
-TRIAL_DAYS = 7
 DROP_ALERT_PCT = 5
 
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
@@ -39,42 +37,12 @@ dp = Dispatcher()
 # ═══════════════════════════════════════════════════════════
 # БАЗА ДАННЫХ
 # ═══════════════════════════════════════════════════════════
-
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY,
-            username TEXT,
-            first_name TEXT,
-            tariff TEXT DEFAULT 'trial',
-            paid_until INTEGER DEFAULT 0,
-            trial_until INTEGER DEFAULT 0,
-            referrer_id INTEGER,
-            created_at INTEGER DEFAULT (strftime('%s','now'))
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS tracks (
-            user_id INTEGER,
-            nm INTEGER,
-            target INTEGER DEFAULT 0,
-            last_price INTEGER,
-            added_at INTEGER DEFAULT (strftime('%s','now')),
-            PRIMARY KEY (user_id, nm)
-        )
-    """)
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS payments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            amount INTEGER,
-            currency TEXT,
-            payload TEXT,
-            created_at INTEGER DEFAULT (strftime('%s','now'))
-        )
-    """)
+    c.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, first_name TEXT, tariff TEXT DEFAULT 'free', paid_until INTEGER DEFAULT 0, created_at INTEGER DEFAULT (strftime('%s','now')))")
+    c.execute("CREATE TABLE IF NOT EXISTS tracks (user_id INTEGER, nm INTEGER, target INTEGER DEFAULT 0, last_price INTEGER, added_at INTEGER DEFAULT (strftime('%s','now')), PRIMARY KEY (user_id, nm))")
+    c.execute("CREATE TABLE IF NOT EXISTS payments (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, amount INTEGER, currency TEXT, payload TEXT, created_at INTEGER DEFAULT (strftime('%s','now')))")
     conn.commit()
     conn.close()
 
@@ -100,10 +68,8 @@ def db_run(sql, params=()):
 # ═══════════════════════════════════════════════════════════
 # WB API
 # ═══════════════════════════════════════════════════════════
-
 async def fetch_wb_prices(nms):
-    if not nms:
-        return {}
+    if not nms: return {}
     import aiohttp
     url = f"https://card.wb.ru/cards/v4/detail?appType=1&curr=rub&dest=-1257786&spp=30&nm={';'.join(map(str, nms))}"
     try:
@@ -125,34 +91,19 @@ async def fetch_wb_prices(nms):
 # ═══════════════════════════════════════════════════════════
 # ТАРИФЫ И ЛИМИТЫ
 # ═══════════════════════════════════════════════════════════
-
 def get_user(user_id):
-    return db_one("SELECT id, tariff, paid_until, trial_until FROM users WHERE id = ?", (user_id,))
+    return db_one("SELECT id, tariff, paid_until FROM users WHERE id = ?", (user_id,))
 
 def get_limit(user_id):
     u = get_user(user_id)
-    if not u:
-        return FREE_LIMIT
+    if not u: return FREE_LIMIT
     now = int(datetime.now().timestamp())
-    if u[1] == 'business' and u[2] > now:
-        return BUSINESS_LIMIT
-    if u[1] == 'pro' and u[2] > now:
-        return PRO_LIMIT
-    if u[3] > now:
-        return PRO_LIMIT  # trial = Pro-функции
+    if u[2] > now: return PRO_LIMIT
     return FREE_LIMIT
-
-def is_paid(user_id):
-    u = get_user(user_id)
-    if not u:
-        return False
-    now = int(datetime.now().timestamp())
-    return u[2] > now or u[3] > now
 
 # ═══════════════════════════════════════════════════════════
 # КЛАВИАТУРЫ
 # ═══════════════════════════════════════════════════════════
-
 def main_reply_menu():
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -173,7 +124,6 @@ def monitoring_menu():
 def subscription_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text=f"⭐️ Оплатить {PRO_PRICE_STARS} Stars", callback_data="pay_stars")],
-        [InlineKeyboardButton(text="🎁 Активировать промокод", callback_data="promo")],
         [InlineKeyboardButton(text="🔙 Назад", callback_data="back_main")]
     ])
 
@@ -196,14 +146,9 @@ async def cmd_start(message: Message):
     uid = message.from_user.id
     name = message.from_user.first_name or "друг"
 
-    # Регистрация
     if not get_user(uid):
-        trial_until = int((datetime.now() + timedelta(days=TRIAL_DAYS)).timestamp())
-        db_run(
-            "INSERT INTO users (id, username, first_name, tariff, trial_until) VALUES (?, ?, ?, 'trial', ?)",
-            (uid, message.from_user.username, name, trial_until)
-        )
-        logging.info(f"New user: {uid} @{message.from_user.username}")
+        db_run("INSERT INTO users (id, username, first_name) VALUES (?, ?, ?)", (uid, message.from_user.username, name))
+        logging.info(f"New user: {uid}")
 
     text = (
         f"👋 <b>Привет, {name}!</b>\n\n"
@@ -212,22 +157,34 @@ async def cmd_start(message: Message):
         "📊 Слежу за ценами 24/7\n"
         "🔔 Присылаю алерты при падении цен\n"
         "🕵️ Показываю, кто демпингует\n\n"
-        f"🎁 Твой триал: <b>{TRIAL_DAYS} дней Pro-функций бесплатно</b>.\n"
-        "После — 2990₽/мес или 300⭐️.\n\n"
+        f"🎁 <b>Бесплатно:</b> {FREE_LIMIT} товара.\n"
+        f"💎 <b>Безлимит (Pro):</b> {PRO_PRICE_STARS} ⭐️ (до {PRO_LIMIT} товаров).\n\n"
         "👇 Нажми кнопку внизу, чтобы начать."
     )
     await message.answer(text, reply_markup=main_reply_menu())
 
-# --- Кнопки нижнего меню ---
+@dp.message(Command("stats"))
+async def cmd_stats(message: Message):
+    if message.from_user.id != ADMIN_ID: return
+    users = db_one("SELECT COUNT(*) FROM users")[0]
+    paid = db_one("SELECT COUNT(*) FROM users WHERE paid_until > ?", (int(datetime.now().timestamp()),))[0]
+    tracks = db_one("SELECT COUNT(*) FROM tracks")[0]
+    revenue = db_one("SELECT SUM(amount) FROM payments")[0] or 0
+    
+    await message.answer(
+        f"📈 <b>Статистика</b>\n\n"
+        f"👥 Юзеров: {users}\n"
+        f"💎 Pro: {paid}\n"
+        f"📦 Товаров: {tracks}\n"
+        f"⭐️ Stars: {revenue}"
+    )
+
 @dp.message(F.text == "📊 Мониторинг")
 async def show_monitoring(message: Message):
     uid = message.from_user.id
     count = db_one("SELECT COUNT(*) FROM tracks WHERE user_id = ?", (uid,))[0]
     limit = get_limit(uid)
-    text = (
-        f"📊 <b>Мониторинг цен</b>\n\n"
-        f"Всего товаров: {count} / {limit}\n"
-    )
+    text = f"📊 <b>Мониторинг</b>\n\nТоваров: {count} / {limit}"
     await message.answer(text, reply_markup=monitoring_menu())
 
 @dp.message(F.text == "💎 Подписка")
@@ -235,21 +192,16 @@ async def show_subscription(message: Message):
     uid = message.from_user.id
     u = get_user(uid)
     now = int(datetime.now().timestamp())
-    if u[2] > now:
+    status = "🆓 Free"
+    if u and u[2] > now:
         till = datetime.fromtimestamp(u[2]).strftime("%d.%m.%Y")
         status = f"💎 Pro (до {till})"
-    elif u[3] > now:
-        till = datetime.fromtimestamp(u[3]).strftime("%d.%m.%Y")
-        status = f"🎁 Триал (до {till})"
-    else:
-        status = "🆓 Free"
     text = (
         f"💎 <b>Подписка</b>\n\n"
-        f"Текущий статус: {status}\n\n"
-        f"<b>Тарифы:</b>\n"
-        f"🆓 Free — 3 товара, проверка раз в день\n"
-        f"⭐️ Pro — 2990₽/мес, 50 товаров, проверка раз в час\n\n"
-        f"Оплати Stars или активируй промокод:"
+        f"Статус: {status}\n\n"
+        f"🆓 Free — {FREE_LIMIT} товара\n"
+        f"⭐️ Pro — {PRO_LIMIT} товаров ({PRO_PRICE_STARS} ⭐️)\n\n"
+        f"Оплати Stars, чтобы снять лимит:"
     )
     await message.answer(text, reply_markup=subscription_menu())
 
@@ -257,29 +209,21 @@ async def show_subscription(message: Message):
 async def show_help(message: Message):
     text = (
         "❓ <b>Помощь</b>\n\n"
-        "1. Открой «Мониторинг» → «Добавить товар».\n"
-        "2. Отправь ссылку на товар с Wildberries.\n"
-        "3. Можно добавить цель: <code>...detail.aspx 1500</code>.\n"
-        "4. Я проверяю цену каждый час.\n"
-        "5. При падении на 5% — пришлю алерт.\n\n"
-        "💬 Поддержка: @wb_detector_support"
+        "1. Кидай ссылку на товар WB.\n"
+        "2. Можно добавить цель: <code>...detail.aspx 1500</code>\n"
+        "3. Проверяю раз в час.\n"
+        "4. Алерт при падении на 5% или цели.\n\n"
+        "💬 Поддержка: @твой_ник"
     )
     await message.answer(text, reply_markup=back_menu())
 
 @dp.message(F.text == "⚙️ Настройки")
 async def show_settings(message: Message):
-    await message.answer(
-        "⚙️ <b>Настройки</b>\n\n"
-        "Скоро появятся: часовой пояс, настройка алертов, реферальная программа.",
-        reply_markup=back_menu()
-    )
+    await message.answer("⚙️ Настройки скоро появятся.", reply_markup=back_menu())
 
-# --- Inline-кнопки ---
 @dp.callback_query(F.data == "back_main")
 async def cb_back_main(callback: CallbackQuery):
-    await callback.message.edit_text("🏠 Главное меню", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📊 Мониторинг", callback_data="monitoring_menu")]
-    ]))
+    await callback.message.edit_text("🏠 Главное меню", reply_markup=back_menu())
     await callback.answer()
 
 @dp.callback_query(F.data == "monitoring_menu")
@@ -290,21 +234,16 @@ async def cb_monitoring(callback: CallbackQuery):
 @dp.callback_query(F.data == "add_product")
 async def cb_add_product(callback: CallbackQuery):
     await callback.message.edit_text(
-        "➕ <b>Добавление товара</b>\n\n"
-        "Отправь ссылку на карточку Wildberries:\n"
-        "<code>https://www.wildberries.ru/catalog/14671602/detail.aspx</code>\n\n"
-        "Можно указать цель через пробел:\n"
-        "<code>...detail.aspx 1500</code>",
+        "➕ <b>Добавление товара</b>\n\nОтправь ссылку на карточку Wildberries:\n<code>https://www.wildberries.ru/catalog/14671602/detail.aspx</code>",
         reply_markup=back_menu()
     )
     await callback.answer()
 
 @dp.callback_query(F.data == "my_products")
 async def cb_my_products(callback: CallbackQuery):
-    uid = callback.from_user.id
-    rows = db_all("SELECT nm, target, last_price FROM tracks WHERE user_id = ?", (uid,))
+    rows = db_all("SELECT nm, target, last_price FROM tracks WHERE user_id = ?", (callback.from_user.id,))
     if not rows:
-        await callback.message.edit_text("📭 Пока ничего не отслеживается.", reply_markup=back_menu())
+        await callback.message.edit_text("📭 Пусто.", reply_markup=back_menu())
         await callback.answer()
         return
     await callback.message.edit_text("📋 <b>Твои товары:</b>", reply_markup=back_menu())
@@ -330,7 +269,7 @@ async def cb_pay_stars(callback: CallbackQuery):
     await bot.send_invoice(
         chat_id=callback.message.chat.id,
         title="WB Детектор Pro (30 дней)",
-        description="50 товаров, проверка раз в час, алерты",
+        description=f"До {PRO_LIMIT} товаров, проверка раз в час",
         payload="pro_30d",
         provider_token="",
         currency="XTR",
@@ -344,29 +283,21 @@ async def process_pre_checkout(q: PreCheckoutQuery):
 
 @dp.message(F.successful_payment)
 async def process_payment(message: Message):
-    uid = message.chat.id
     until = int((datetime.now() + timedelta(days=30)).timestamp())
-    db_run("UPDATE users SET tariff='pro', paid_until=? WHERE id=?", (until, uid))
+    db_run("UPDATE users SET tariff='pro', paid_until=? WHERE id=?", (until, message.chat.id))
     db_run("INSERT INTO payments (user_id, amount, currency, payload) VALUES (?, ?, ?, ?)",
-           (uid, PRO_PRICE_STARS, "XTR", "pro_30d"))
+           (message.chat.id, PRO_PRICE_STARS, "XTR", "pro_30d"))
     till = datetime.fromtimestamp(until).strftime("%d.%m.%Y")
-    await message.answer(
-        f"✅ <b>Оплата прошла!</b>\n\n"
-        f"Твой Pro активирован до {till}.\n"
-        f"Теперь можешь добавить до {PRO_LIMIT} товаров.",
-        reply_markup=main_reply_menu()
-    )
+    await message.answer(f"✅ <b>Оплата прошла!</b>\n\nТвой Pro активирован до {till}.", reply_markup=main_reply_menu())
 
-# --- Обработка ссылок ---
 @dp.message(F.text)
 async def handle_text(message: Message):
     text = message.text.strip()
-    if text in ["📊 Мониторинг", "💎 Подписка", "❓ Помощь", "⚙️ Настройки"]:
-        return
+    if text in ["📊 Мониторинг", "💎 Подписка", "❓ Помощь", "⚙️ Настройки"]: return
 
     match = re.search(r"catalog/(\d+)/detail", text)
     if not match:
-        await message.answer("🤔 Не вижу ссылку на товар. Кинь ссылку с WB или используй меню.")
+        await message.answer("🤔 Не вижу ссылку на товар. Кинь ссылку с WB.")
         return
 
     nm = int(match.group(1))
@@ -375,97 +306,64 @@ async def handle_text(message: Message):
     limit = get_limit(uid)
 
     if count >= limit:
-        await message.answer(
-            f"🚫 <b>Лимит исчерпан</b>\n\n"
-            f"На твоём тарифе доступно {limit} товаров.\n"
-            f"У тебя уже {count}.\n\n"
-            f"💎 Оформи Pro в разделе «Подписка».",
-            reply_markup=main_reply_menu()
-        )
+        await message.answer(f"🚫 <b>Лимит исчерпан</b>\n\nДоступно {limit} товаров. Оформи Pro в меню.", reply_markup=main_reply_menu())
         return
 
     target = 0
     t_match = re.search(r"\s(\d{3,7})\s*$", text)
-    if t_match:
-        target = int(t_match.group(1))
+    if t_match: target = int(t_match.group(1))
 
     prices = await fetch_wb_prices([nm])
     price = prices.get(nm)
 
-    db_run("INSERT OR REPLACE INTO tracks (user_id, nm, target, last_price) VALUES (?, ?, ?, ?)",
-           (uid, nm, target, price))
-
+    db_run("INSERT OR REPLACE INTO tracks (user_id, nm, target, last_price) VALUES (?, ?, ?, ?)", (uid, nm, target, price))
+    
     if price is None:
-        await message.answer(f"✅ Товар <code>{nm}</code> добавлен.\n⚠️ Нет в наличии, сообщу когда появится.")
+        await message.answer(f"✅ Товар <code>{nm}</code> добавлен (нет в наличии).")
     else:
         msg = f"✅ Товар <code>{nm}</code> добавлен.\n💰 Цена: <b>{price} ₽</b>\n"
         msg += f"🎯 Алерт при <= {target} ₽" if target else f"🎯 Алерт при падении на {DROP_ALERT_PCT}%+"
         await message.answer(msg)
 
 # ═══════════════════════════════════════════════════════════
-# МОНИТОРИНГ (APScheduler через asyncio)
+# ФОНОВАЯ ПРОВЕРКА
 # ═══════════════════════════════════════════════════════════
-
 async def check_prices():
-    logging.info("🔄 Запуск проверки цен")
+    logging.info("🔄 Проверка цен...")
     rows = db_all("SELECT user_id, nm, target, last_price FROM tracks")
-    if not rows:
-        return
-
+    if not rows: return
     by_nm = {}
     for uid, nm, target, last_price in rows:
         by_nm.setdefault(nm, []).append((uid, target, last_price))
-
+    
     nms = list(by_nm.keys())
     for i in range(0, len(nms), 50):
-        chunk = nms[i:i+50]
-        prices = await fetch_wb_prices(chunk)
-        for nm in chunk:
-            if nm not in prices:
-                continue
+        prices = await fetch_wb_prices(nms[i:i+50])
+        for nm, watchers in by_nm.items():
+            if nm not in prices: continue
             new_price = prices[nm]
-            for uid, target, old_price in by_nm[nm]:
-                if not old_price:
-                    db_run("UPDATE tracks SET last_price=? WHERE user_id=? AND nm=?",
-                           (new_price, uid, nm))
-                    continue
-                hit = False
-                if new_price < old_price:
-                    if target and new_price <= target:
-                        hit = True
-                    elif not target and (old_price - new_price) >= old_price * DROP_ALERT_PCT / 100:
-                        hit = True
-                if hit:
-                    url = f"https://www.wildberries.ru/catalog/{nm}/detail.aspx"
-                    try:
-                        await bot.send_message(
-                            uid,
-                            f"📉 <b>Цена упала!</b>\n\n"
-                            f"Артикул: <code>{nm}</code>\n"
-                            f"Было: {old_price} ₽\n"
-                            f"Стало: <b>{new_price} ₽</b>\n\n"
-                            f"🔗 {url}",
-                            disable_web_page_preview=True
-                        )
-                    except Exception as e:
-                        logging.error(f"Alert to {uid} failed: {e}")
+            for uid, target, old_price in watchers:
+                if old_price and new_price < old_price:
+                    hit = (target and new_price <= target) or (not target and (old_price - new_price) >= old_price * DROP_ALERT_PCT / 100)
+                    if hit:
+                        url = f"https://www.wildberries.ru/catalog/{nm}/detail.aspx"
+                        try:
+                            await bot.send_message(uid, f"📉 <b>Цена упала!</b>\n\nАртикул: <code>{nm}</code>\nБыло: {old_price} ₽\nСтало: <b>{new_price} ₽</b>\n\n🔗 {url}", disable_web_page_preview=True)
+                        except Exception as e:
+                            logging.error(f"Alert fail: {e}")
                 if new_price != old_price:
-                    db_run("UPDATE tracks SET last_price=? WHERE user_id=? AND nm=?",
-                           (new_price, uid, nm))
+                    db_run("UPDATE tracks SET last_price=? WHERE user_id=? AND nm=?", (new_price, uid, nm))
 
 async def scheduler_loop():
     await asyncio.sleep(10)
     while True:
-        try:
-            await check_prices()
-        except Exception as e:
-            logging.exception(f"Scheduler error: {e}")
-        await asyncio.sleep(3600)  # раз в час
+        try: await check_prices()
+        except Exception as e: logging.exception(f"Scheduler: {e}")
+        await asyncio.sleep(3600)
 
 # ═══════════════════════════════════════════════════════════
 # ЗАПУСК
 # ═══════════════════════════════════════════════════════════
-
 async def on_startup(app):
     init_db()
     if WEBHOOK_URL:
@@ -482,7 +380,7 @@ def main():
     SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path=WEBHOOK_PATH)
     setup_application(app, dp, bot=bot)
     app.on_startup.append(on_startup)
-
+    
     port = int(os.environ.get("PORT", 8080))
     logging.info(f"Starting on 0.0.0.0:{port}")
     web.run_app(app, host="0.0.0.0", port=port)
