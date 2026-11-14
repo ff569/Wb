@@ -31,12 +31,14 @@ async def health(_request: web.Request) -> web.Response:
     return web.Response(text="OK")
 
 
-async def on_startup(webhook_url: str, webhook_path: str, secret: str, bot: Bot) -> None:
+# ИСПРАВЛЕНИЕ 1: Добавили аргумент dp в функцию on_startup
+async def on_startup(webhook_url: str, webhook_path: str, secret: str, bot: Bot, dp: Dispatcher) -> None:
     if webhook_url:
         await bot.set_webhook(
             f"{webhook_url}{webhook_path}",
             secret_token=secret or None,
-            allowed_updates=Dispatcher.resolve_used_update_types(),
+            # ИСПРАВЛЕНИЕ 2: Теперь dp доступен, и ошибка missing 'self' исчезнет
+            allowed_updates=dp.resolve_used_update_types(),
             drop_pending_updates=True,
         )
         logger.info("Webhook set: %s%s", webhook_url, webhook_path)
@@ -57,7 +59,8 @@ async def run_webhook(bot: Bot, dp: Dispatcher, settings) -> None:
     handler.register(app, path=settings.webhook_path)
     setup_application(app, dp, bot=bot)
 
-    await on_startup(settings.webhook_url, settings.webhook_path, settings.webhook_secret, bot)
+    # ИСПРАВЛЕНИЕ 3: Передаем dp в on_startup при вызове
+    await on_startup(settings.webhook_url, settings.webhook_path, settings.webhook_secret, bot, dp)
 
     logger.info("HTTP server listening on 0.0.0.0:%s", settings.port)
     runner = web.AppRunner(app)
