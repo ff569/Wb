@@ -11,8 +11,8 @@ from app.keyboards import inline, reply
 from app.services.wb_api import WBApiClient, WBApiError
 from app.texts import (
     ADD_PRODUCT,
+    err_limit_reached,
     CHECK_DONE,
-    CHECK_NOTHING,
     CHECK_STARTED,
     DELETE_CONFIRM,
     ERR_ADD_FAILED,
@@ -35,7 +35,14 @@ from app.utils import product_url, split_link_and_target
 logger = logging.getLogger(__name__)
 router = Router()
 
-wb_client = WBApiClient()
+_wb_clients: dict[str, WBApiClient] = {}
+
+
+def get_wb_client(settings: Settings) -> WBApiClient:
+    proxy = settings.proxy_url or ""
+    if proxy not in _wb_clients:
+        _wb_clients[proxy] = WBApiClient(settings.proxy_url)
+    return _wb_clients[proxy]
 
 
 def price_str(price: int | None) -> str:
@@ -166,7 +173,7 @@ async def handle_product_link(
         return
 
     try:
-        info = await wb_client.get_price(article)
+        info = await get_wb_client(settings).get_price(article)
     except WBApiError:
         logger.error("WB API unavailable while adding nm=%s", article)
         await repos.tracks.add(message.from_user.id, article, "", target, None)

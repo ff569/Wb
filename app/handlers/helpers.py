@@ -1,7 +1,6 @@
 import time
 
 from app.config import Settings
-from app.database import Repositories
 from app.texts import MONITORING
 
 
