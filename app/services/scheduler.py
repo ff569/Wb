@@ -22,7 +22,7 @@ class PriceScheduler:
         self._bot = bot
         self._repos = repos
         self._settings = settings
-        self._wb = WBApiClient()
+        self._wb = WBApiClient(settings.proxy_url)
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
