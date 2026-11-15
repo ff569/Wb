@@ -18,6 +18,7 @@ class Settings:
     pro_days: int
     default_drop_pct: int
     support_url: str
+    proxy_url: str
 
 
 def _parse_admin_ids(raw: str) -> tuple[int, ...]:
@@ -56,4 +57,5 @@ def load_settings() -> Settings:
         pro_days=int(os.getenv("PRO_DAYS", "30")),
         default_drop_pct=int(os.getenv("DEFAULT_DROP_PCT", "5")),
         support_url=os.getenv("SUPPORT_URL", "https://t.me/wb_detector_support"),
+        proxy_url=os.getenv("PROXY_URL", "").strip(),
     )

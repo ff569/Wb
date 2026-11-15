@@ -1,6 +1,6 @@
 import logging
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from aiogram import F, Router
 from aiogram.types import (
